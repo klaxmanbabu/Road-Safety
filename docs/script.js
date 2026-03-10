@@ -1,140 +1,270 @@
-// Game variables
-let score = 0;
-let timeLeft = 60;
-let timerId = null;
-let gameRunning = false;
+(function () {
+  const QUESTION_COUNT = 6;
+  const BEST_SCORE_KEY = "rsq_best_percent_v1";
+  const NICKNAME_KEY = "rsq_nickname_v1";
+  const PASS_MARK = 80;
+  const QUIZ_TIME_SECONDS = 60; // total time for the quiz
 
-const playerSpeed = 10;
+  function $(id) { return document.getElementById(id); }
 
-const scoreElement = document.getElementById("score");
-const timerElement = document.getElementById("timer");
-const startButton = document.getElementById("start-button");
-const gameArea = document.getElementById("game-area");
-const player = document.getElementById("player");
-const target = document.getElementById("target");
-const gameOverMessage = document.getElementById("game-over-message");
+  const els = {
+    startScreen: $("startScreen"),
+    quizScreen: $("quizScreen"),
+    resultScreen: $("resultScreen"),
+    startBtn: $("startBtn"),
+    nextBtn: $("nextBtn"),
+    restartBtn: $("restartBtn"),
+    nickname: $("nickname"),
+    questionBlock: $("questionBlock"),
+    progressText: $("progressText"),
+    scoreSoFar: $("scoreSoFar"),
+    resultSummary: $("resultSummary"),
+    reviewBlock: $("reviewBlock"),
+    timerText: $("timerText") // new element
+  };
 
-// Initial positions
-let playerX = 50;
-let playerY = 50;
+  const required = [
+    "startScreen","quizScreen","resultScreen","startBtn","nextBtn",
+    "restartBtn","questionBlock","progressText","scoreSoFar",
+    "resultSummary","reviewBlock","timerText"
+  ];
+  const missing = required.filter(k => !els[k]);
+  if (missing.length) {
+    console.error("Quiz init failed. Missing element IDs:", missing);
+    return;
+  }
 
-// Start button
-startButton.addEventListener("click", function () {
-  if (gameRunning) return; // avoid multiple starts
-  resetGame();
-  startGame();
-});
+  const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
+  if (!bank.length) {
+    els.startBtn.disabled = true;
+    els.startScreen.insertAdjacentHTML(
+      "beforeend",
+      `<p class="hint">Question bank not found. Check questions.js.</p>`
+    );
+    return;
+  }
 
-// Keyboard controls
-document.addEventListener("keydown", function (event) {
-  if (!gameRunning) return;
-
-  const areaRect = gameArea.getBoundingClientRect();
-  const playerRect = player.getBoundingClientRect();
-
-  if (event.key === "ArrowUp") {
-    if (playerRect.top - areaRect.top > 0) {
-      playerY -= playerSpeed;
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
     }
-  } else if (event.key === "ArrowDown") {
-    if (playerRect.bottom - areaRect.top < areaRect.height) {
-      playerY += playerSpeed;
+    return a;
+  }
+  function pickN(arr, n) { return shuffle(arr).slice(0, Math.min(n, arr.length)); }
+  function show(el) { el.classList.remove("hidden"); }
+  function hide(el) { el.classList.add("hidden"); }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function getBestPercent() {
+    const raw = localStorage.getItem(BEST_SCORE_KEY);
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  function setBestPercent(p) { localStorage.setItem(BEST_SCORE_KEY, String(p)); }
+
+  function getNickname() { return (localStorage.getItem(NICKNAME_KEY) || "").trim(); }
+  function setNickname(n) { localStorage.setItem(NICKNAME_KEY, (n || "").trim()); }
+
+  function bestLineHtml() {
+    const best = getBestPercent();
+    return best === null ? `<div><strong>Best:</strong> Not set</div>` : `<div><strong>Best:</strong> ${best}%</div>`;
+  }
+
+  let quiz = { questions: [], index: 0, answers: new Map() };
+
+  // Timer state
+  let remainingSeconds = QUIZ_TIME_SECONDS;
+  let timerId = null;
+
+  function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  function updateTimerDisplay() {
+    if (!els.timerText) return;
+    els.timerText.textContent = `Time left: ${formatTime(remainingSeconds)}`;
+  }
+
+  function startTimer() {
+    // Clear any previous timer
+    if (timerId !== null) {
+      clearInterval(timerId);
+      timerId = null;
     }
-  } else if (event.key === "ArrowLeft") {
-    if (playerRect.left - areaRect.left > 0) {
-      playerX -= playerSpeed;
-    }
-  } else if (event.key === "ArrowRight") {
-    if (playerRect.right - areaRect.left < areaRect.width) {
-      playerX += playerSpeed;
+    remainingSeconds = QUIZ_TIME_SECONDS;
+    updateTimerDisplay();
+
+    timerId = setInterval(() => {
+      remainingSeconds -= 1;
+      if (remainingSeconds <= 0) {
+        remainingSeconds = 0;
+        updateTimerDisplay();
+        clearInterval(timerId);
+        timerId = null;
+        // Auto-finish the quiz when time runs out
+        finishQuiz();
+        return;
+      }
+      updateTimerDisplay();
+    }, 1000);
+  }
+
+  function stopTimer() {
+    if (timerId !== null) {
+      clearInterval(timerId);
+      timerId = null;
     }
   }
 
-  updatePlayerPosition();
-  checkCollision();
-});
+  function startQuiz() {
+    try {
+      setNickname(els.nickname ? els.nickname.value : "");
+      quiz.questions = pickN(bank, QUESTION_COUNT);
+      quiz.index = 0;
+      quiz.answers = new Map();
 
-// Start the game
-function startGame() {
-  gameRunning = true;
-  gameOverMessage.classList.add("hidden");
-  placeTargetRandomly();
-  startTimer();
-}
+      hide(els.startScreen);
+      hide(els.resultScreen);
+      show(els.quizScreen);
 
-// Reset game state
-function resetGame() {
-  score = 0;
-  timeLeft = 60;
-  scoreElement.textContent = "Score: " + score;
-  timerElement.textContent = "Time: " + timeLeft;
-
-  playerX = 50;
-  playerY = 50;
-  updatePlayerPosition();
-
-  clearInterval(timerId);
-}
-
-// Timer
-function startTimer() {
-  clearInterval(timerId);
-  timerId = setInterval(function () {
-    timeLeft--;
-    if (timeLeft < 0) {
-      timeLeft = 0;
+      startTimer();
+      renderQuestion();
+    } catch (e) {
+      console.error("Start quiz error:", e);
+      alert("Something went wrong starting the quiz. Please refresh and try again.");
     }
-    timerElement.textContent = "Time: " + timeLeft;
-
-    if (timeLeft <= 0) {
-      endGame();
-    }
-  }, 1000);
-}
-
-// End game
-function endGame() {
-  gameRunning = false;
-  clearInterval(timerId);
-  gameOverMessage.textContent = "Game Over. Score: " + score;
-  gameOverMessage.classList.remove("hidden");
-}
-
-// Move player visually
-function updatePlayerPosition() {
-  player.style.left = playerX + "px";
-  player.style.top = playerY + "px";
-}
-
-// Place target at random position
-function placeTargetRandomly() {
-  const areaRect = gameArea.getBoundingClientRect();
-  const targetSize = 20;
-
-  const maxX = areaRect.width - targetSize;
-  const maxY = areaRect.height - targetSize;
-
-  const x = Math.floor(Math.random() * maxX);
-  const y = Math.floor(Math.random() * maxY);
-
-  target.style.left = x + "px";
-  target.style.top = y + "px";
-}
-
-// Check collision between player and target
-function checkCollision() {
-  const playerRect = player.getBoundingClientRect();
-  const targetRect = target.getBoundingClientRect();
-
-  const overlap =
-    playerRect.left < targetRect.right &&
-    playerRect.right > targetRect.left &&
-    playerRect.top < targetRect.bottom &&
-    playerRect.bottom > targetRect.top;
-
-  if (overlap) {
-    score++;
-    scoreElement.textContent = "Score: " + score;
-    placeTargetRandomly();
   }
-}
+
+  function renderQuestion() {
+    const qObj = quiz.questions[quiz.index];
+    if (!qObj) return;
+
+    els.nextBtn.disabled = true;
+
+    const chosen = quiz.answers.get(qObj.id);
+
+    els.progressText.textContent = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
+    els.scoreSoFar.innerHTML = `
+      <div>Answered: ${quiz.answers.size}/${quiz.questions.length}</div>
+      ${bestLineHtml()}
+    `;
+
+    const optionsHtml = qObj.options.map((opt, idx) => {
+      const checked = chosen === idx ? "checked" : "";
+      return `
+        <label class="option">
+          <input type="radio" name="opt" value="${idx}" ${checked} />
+          <span>${escapeHtml(opt)}</span>
+        </label>
+      `;
+    }).join("");
+
+    els.questionBlock.innerHTML = `
+      <h2>${escapeHtml(qObj.q)}</h2>
+      <div class="options">${optionsHtml}</div>
+    `;
+
+    els.questionBlock.querySelectorAll('input[name="opt"]').forEach((r) => {
+      r.addEventListener("change", (e) => {
+        quiz.answers.set(qObj.id, Number(e.target.value));
+        els.nextBtn.disabled = false;
+      });
+    });
+
+    if (typeof chosen === "number") els.nextBtn.disabled = false;
+    els.nextBtn.textContent = (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
+  }
+
+  function finishQuiz() {
+    // Prevent multiple finishes / timer continuing after finish
+    stopTimer();
+
+    const total = quiz.questions.length;
+    let correct = 0;
+
+    const reviewItems = quiz.questions.map((q) => {
+      const selected = quiz.answers.get(q.id);
+      const isCorrect = selected === q.answerIndex;
+      if (isCorrect) correct += 1;
+      return {
+        q: q.q,
+        selectedText: (typeof selected === "number") ? q.options[selected] : "No answer",
+        correctText: q.options[q.answerIndex],
+        isCorrect
+      };
+    });
+
+    const percent = total ? Math.round((correct / total) * 100) : 0;
+    const passed = percent >= PASS_MARK;
+
+    const prevBest = getBestPercent();
+    if (prevBest === null || percent > prevBest) setBestPercent(percent);
+
+    const nick = getNickname();
+    const whoLine = nick ? `<strong>Player:</strong> ${escapeHtml(nick)}<br />` : "";
+
+    els.resultSummary.innerHTML = `
+      ${whoLine}
+      <strong>Score:</strong> ${correct}/${total} (${percent}%)
+      <span class="badge ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span><br />
+      <strong>Pass mark:</strong> ${PASS_MARK}%<br />
+      <strong>Best:</strong> ${getBestPercent()}%<br />
+      <strong>Time limit:</strong> ${QUIZ_TIME_SECONDS} seconds
+    `;
+
+    els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
+      <div class="reviewItem">
+        <div><strong>Q${i + 1}.</strong> ${escapeHtml(it.q)}
+          <span class="badge ${it.isCorrect ? "pass" : "fail"}">${it.isCorrect ? "Correct" : "Incorrect"}</span>
+        </div>
+        <div><strong>Your answer:</strong> ${escapeHtml(it.selectedText)}</div>
+        <div><strong>Correct answer:</strong> ${escapeHtml(it.correctText)}</div>
+      </div>
+    `).join("");
+
+    hide(els.quizScreen);
+    show(els.resultScreen);
+  }
+
+  function next() {
+    const qObj = quiz.questions[quiz.index];
+    if (!qObj) return;
+    if (!quiz.answers.has(qObj.id)) return;
+
+    if (quiz.index === quiz.questions.length - 1) {
+      finishQuiz();
+      return;
+    }
+    quiz.index += 1;
+    renderQuestion();
+  }
+
+  function restart() {
+    stopTimer();
+    hide(els.resultScreen);
+    hide(els.quizScreen);
+    if (els.nickname) els.nickname.value = getNickname();
+    show(els.startScreen);
+  }
+
+  // Wire up
+  els.startBtn.addEventListener("click", startQuiz);
+  els.nextBtn.addEventListener("click", next);
+  els.restartBtn.addEventListener("click", restart);
+
+  // Initialize start screen nickname + best
+  if (els.nickname) els.nickname.value = getNickname();
+  els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">${bestLineHtml()}</p>`);
+})();
