@@ -1,673 +1,209 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Quick Quiz</title>
-  <style>
-    :root{
-      --bg1:#f6f9ff;
-      --bg2:#eef4ff;
+(function () {
+  const QUESTION_COUNT = 6;
+  const BEST_SCORE_KEY = "rsq_best_percent_v1";
+  const NICKNAME_KEY = "rsq_nickname_v1";
+  const PASS_MARK = 80;
 
-      --card:#ffffff;
-      --cardAlt:#f7faff;
+  function $(id) { return document.getElementById(id); }
 
-      --text:#0b1b33;
-      --muted:#4b6285;
+  const els = {
+    startScreen: $("startScreen"),
+    quizScreen: $("quizScreen"),
+    resultScreen: $("resultScreen"),
+    startBtn: $("startBtn"),
+    nextBtn: $("nextBtn"),
+    restartBtn: $("restartBtn"),
+    nickname: $("nickname"),
+    questionBlock: $("questionBlock"),
+    progressText: $("progressText"),
+    scoreSoFar: $("scoreSoFar"),
+    resultSummary: $("resultSummary"),
+    reviewBlock: $("reviewBlock")
+  };
 
-      --blue:#1f6fff;
-      --blue2:#0b57e3;
-      --blueGlow: rgba(31,111,255,.18);
+  const required = ["startScreen","quizScreen","resultScreen","startBtn","nextBtn","restartBtn","questionBlock","progressText","scoreSoFar","resultSummary","reviewBlock"];
+  const missing = required.filter(k => !els[k]);
+  if (missing.length) {
+    console.error("Quiz init failed. Missing element IDs:", missing);
+    return;
+  }
 
-      --border: rgba(12, 33, 64, .12);
-      --shadow: 0 14px 40px rgba(12, 33, 64, .10);
+  const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
+  if (!bank.length) {
+    els.startBtn.disabled = true;
+    els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">Question bank not found. Check questions.js.</p>`);
+    return;
+  }
 
-      --radius: 16px;
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
     }
+    return a;
+  }
+  function pickN(arr, n) { return shuffle(arr).slice(0, Math.min(n, arr.length)); }
+  function show(el) { el.classList.remove("hidden"); }
+  function hide(el) { el.classList.add("hidden"); }
 
-    *{box-sizing:border-box}
-    html,body{height:100%}
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-    body{
-      margin:0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      color: var(--text);
-      background:
-        radial-gradient(900px 450px at 15% -10%, rgba(31,111,255,.16), transparent 60%),
-        radial-gradient(900px 450px at 85% -10%, rgba(11,87,227,.10), transparent 60%),
-        linear-gradient(180deg, var(--bg1), var(--bg2));
+  function getBestPercent() {
+    const raw = localStorage.getItem(BEST_SCORE_KEY);
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+  function setBestPercent(p) { localStorage.setItem(BEST_SCORE_KEY, String(p)); }
+
+  function getNickname() { return (localStorage.getItem(NICKNAME_KEY) || "").trim(); }
+  function setNickname(n) { localStorage.setItem(NICKNAME_KEY, (n || "").trim()); }
+
+  function bestLineHtml() {
+    const best = getBestPercent();
+    return best === null ? `<div><strong>Best:</strong> Not set</div>` : `<div><strong>Best:</strong> ${best}%</div>`;
+  }
+
+  let quiz = { questions: [], index: 0, answers: new Map() };
+
+  function startQuiz() {
+    try {
+      setNickname(els.nickname ? els.nickname.value : "");
+      quiz.questions = pickN(bank, QUESTION_COUNT);
+      quiz.index = 0;
+      quiz.answers = new Map();
+
+      hide(els.startScreen);
+      hide(els.resultScreen);
+      show(els.quizScreen);
+
+      renderQuestion();
+    } catch (e) {
+      console.error("Start quiz error:", e);
+      alert("Something went wrong starting the quiz. Please refresh and try again.");
     }
+  }
 
-    .container{
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 16px 14px 30px;
-    }
+  function renderQuestion() {
+    const qObj = quiz.questions[quiz.index];
+    if (!qObj) return;
 
-    .header{
-      padding: 14px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: linear-gradient(180deg, #ffffff, #f7fbff);
-      box-shadow: var(--shadow);
-    }
+    els.nextBtn.disabled = true;
 
-    .header h1{
-      margin: 0 0 6px;
-      font-size: 24px;
-      letter-spacing: .2px;
-    }
+    const chosen = quiz.answers.get(qObj.id);
 
-    .subtitle{
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.4;
-    }
+    els.progressText.textContent = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
+    els.scoreSoFar.innerHTML = `
+      <div>Answered: ${quiz.answers.size}/${quiz.questions.length}</div>
+      ${bestLineHtml()}
+    `;
 
-    .card{
-      margin-top: 14px;
-      padding: 14px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-    }
+    const optionsHtml = qObj.options.map((opt, idx) => {
+      const checked = chosen === idx ? "checked" : "";
+      return `
+        <label class="option">
+          <input type="radio" name="opt" value="${idx}" ${checked} />
+          <span>${escapeHtml(opt)}</span>
+        </label>
+      `;
+    }).join("");
 
-    .hidden{display:none}
+    els.questionBlock.innerHTML = `
+      <h2>${escapeHtml(qObj.q)}</h2>
+      <div class="options">${optionsHtml}</div>
+    `;
 
-    .row{
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-      margin: 10px 0;
-    }
+    els.questionBlock.querySelectorAll('input[name="opt"]').forEach((r) => {
+      r.addEventListener("change", (e) => {
+        quiz.answers.set(qObj.id, Number(e.target.value));
+        els.nextBtn.disabled = false;
+      });
+    });
 
-    label{
-      color: var(--muted);
-      font-size: 13px;
-    }
+    if (typeof chosen === "number") els.nextBtn.disabled = false;
+    els.nextBtn.textContent = (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
+  }
 
-    input[type="text"], input[type="number"]{
-      width: 100%;
-      padding: 12px 12px;
-      border-radius: 14px;
-      border: 1px solid rgba(12,33,64,.16);
-      background: #ffffff;
-      color: var(--text);
-      outline: none;
-      transition: border-color .15s ease, box-shadow .15s ease;
-    }
+  function finishQuiz() {
+    const total = quiz.questions.length;
+    let correct = 0;
 
-    input::placeholder{ color: rgba(75,98,133,.70); }
-
-    input:focus{
-      border-color: rgba(31,111,255,.55);
-      box-shadow: 0 0 0 4px var(--blueGlow);
-    }
-
-    button{
-      width: 100%;
-      padding: 13px 14px;
-      border-radius: 14px;
-      border: 1px solid rgba(12,33,64,.16);
-      background: linear-gradient(180deg, #ffffff, #f3f7ff);
-      color: var(--text);
-      cursor: pointer;
-      font-weight: 700;
-      letter-spacing: .2px;
-      transition: transform .06s ease, filter .15s ease, background .15s ease, border-color .15s ease;
-    }
-
-    button:hover{
-      border-color: rgba(31,111,255,.35);
-      background: linear-gradient(180deg, #ffffff, #eef4ff);
-    }
-
-    button:active{ transform: translateY(1px); }
-
-    button.primary{
-      border-color: rgba(31,111,255,.55);
-      background: linear-gradient(180deg, var(--blue), var(--blue2));
-      color: #ffffff;
-      box-shadow: 0 12px 26px rgba(31,111,255,.18);
-    }
-
-    button.primary:hover{ filter: brightness(1.02); }
-
-    button:disabled{
-      opacity: .60;
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-
-    .hint{
-      color: var(--muted);
-      font-size: 12px;
-      margin-top: 10px;
-    }
-
-    .meta{
-      display:flex;
-      justify-content:space-between;
-      gap:10px;
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
-    }
-
-    .questionBlock h2{
-      margin: 0 0 10px;
-      font-size: 17px;
-      line-height: 1.25;
-    }
-
-    .options{
-      display:grid;
-      gap:10px;
-      margin-top: 10px;
-    }
-
-    .option{
-      display:flex;
-      gap:10px;
-      align-items:flex-start;
-      padding: 12px 12px;
-      border: 1px solid rgba(12,33,64,.14);
-      border-radius: 14px;
-      background: linear-gradient(180deg, #ffffff, #f7fbff);
-      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
-    }
-
-    .option:hover{
-      border-color: rgba(31,111,255,.35);
-      box-shadow: 0 10px 22px rgba(12,33,64,.08);
-    }
-
-    .option input{ margin-top: 3px; }
-
-    .actions{
-      margin-top: 14px;
-      display:flex;
-      justify-content:flex-end;
-    }
-
-    .review summary{
-      cursor:pointer;
-      color: var(--muted);
-      font-weight: 700;
-    }
-
-    .reviewItem{
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid var(--border);
-    }
-
-    .badge{
-      display:inline-block;
-      padding: 2px 9px;
-      border-radius: 999px;
-      font-size: 12px;
-      margin-left: 8px;
-      border: 1px solid rgba(12,33,64,.14);
-      color: var(--muted);
-      background: #ffffff;
-    }
-
-    .badge.pass{
-      color: #116b2f;
-      border-color: rgba(17,107,47,.25);
-      background: rgba(33,197,93,.10);
-    }
-    .badge.fail{
-      color: #8b1f1f;
-      border-color: rgba(139,31,31,.25);
-      background: rgba(255,90,95,.10);
-    }
-
-    .footer{
-      margin-top: 16px;
-      text-align:center;
-      color: var(--muted);
-    }
-
-    @media (min-width: 700px){
-      .container{ padding: 22px 18px 44px; }
-      .header h1{ font-size: 28px; }
-      .row{ flex-direction: row; align-items: center; }
-      input[type="text"], input[type="number"]{ max-width: 460px; }
-      button{ max-width: 460px; }
-    }
-
-    .option input:focus-visible {
-      outline: none;
-    }
-    .option:has(input:focus-visible) {
-      box-shadow: 0 0 0 3px var(--blueGlow);
-      border-color: rgba(31,111,255,.70);
-    }
-    .option:has(input:checked) {
-      border-color: rgba(31,111,255,.65);
-      box-shadow: 0 10px 24px rgba(31,111,255,.16);
-      background: linear-gradient(180deg, #ffffff, #edf3ff);
-    }
-  </style>
-</head>
-<body>
-  <main class="container">
-    <header class="header">
-      <h1>Quick Quiz</h1>
-      <p class="subtitle">Walk-up, self-paced. Refresh to get a new random set of 6 questions.</p>
-    </header>
-
-    <section id="startScreen" class="card">
-      <div class="row">
-        <label for="nickname"><strong>Optional: Enter your name.</strong></label>
-      </div>
-      <div class="row">
-        <input id="nickname" type="text" maxlength="24" placeholder="Nickname (optional)" />
-      </div>
-
-      <div class="row">
-        <button id="startBtn" class="primary" type="button">Start quiz</button>
-      </div>
-
-      <p class="hint">This demo stores progress only on your device (no server).</p>
-    </section>
-
-    <section id="quizScreen" class="card hidden" aria-live="polite">
-      <div class="meta">
-        <div id="progressText"></div>
-        <div id="scoreSoFar"></div>
-        <div id="timerText"></div>
-      </div>
-
-      <div id="questionBlock" class="questionBlock"></div>
-
-      <div class="actions">
-        <button id="nextBtn" class="primary" type="button" disabled>Next</button>
-      </div>
-    </section>
-
-    <section id="resultScreen" class="card hidden" aria-live="polite">
-      <h2>Results</h2>
-      <p id="resultSummary"></p>
-
-      <details class="review">
-        <summary>Review answers</summary>
-        <div id="reviewBlock"></div>
-      </details>
-
-      <div class="actions">
-        <button id="restartBtn" type="button">Play Again</button>
-      </div>
-    </section>
-
-    <footer class="footer">
-      <small>Hosted on GitHub Pages</small>
-    </footer>
-  </main>
-
-  <script>
-    window.QUESTION_BANK = [
-      {
-        id: "q1",
-        q: "What does HTML stand for?",
-        options: [
-          "Hyper Text Markup Language",
-          "Home Tool Markup Language",
-          "Hyperlinks and Text Markup Language",
-          "Hyperlinking Text Management Language"
-        ],
-        answerIndex: 0
-      },
-      {
-        id: "q2",
-        q: "Which HTML tag is used to define an unordered list?",
-        options: [
-          "<ol>",
-          "<ul>",
-          "<li>",
-          "<list>"
-        ],
-        answerIndex: 1
-      },
-      {
-        id: "q3",
-        q: "Which CSS property controls the text size?",
-        options: [
-          "font-style",
-          "text-size",
-          "font-size",
-          "text-style"
-        ],
-        answerIndex: 2
-      },
-      {
-        id: "q4",
-        q: "Which JavaScript method is used to print content to the browser console?",
-        options: [
-          "console.print()",
-          "log.console()",
-          "console.write()",
-          "console.log()"
-        ],
-        answerIndex: 3
-      },
-      {
-        id: "q5",
-        q: "Which HTML attribute is used to define inline styles?",
-        options: [
-          "class",
-          "style",
-          "font",
-          "styles"
-        ],
-        answerIndex: 1
-      },
-      {
-        id: "q6",
-        q: "Which CSS property is used to change the text color of an element?",
-        options: [
-          "fgcolor",
-          "font-color",
-          "text-color",
-          "color"
-        ],
-        answerIndex: 3
-      },
-      {
-        id: "q7",
-        q: "Which symbol is used for comments in CSS?",
-        options: [
-          "// comment",
-          "<!-- comment -->",
-          "/* comment */",
-          "# comment"
-        ],
-        answerIndex: 2
-      },
-      {
-        id: "q8",
-        q: "Which HTML tag is used to define the largest heading?",
-        options: [
-          "<heading>",
-          "<h6>",
-          "<h1>",
-          "<head>"
-        ],
-        answerIndex: 2
-      }
-    ];
-  </script>
-
-  <script>
-    (function () {
-      const QUESTION_COUNT = 6;
-      const BEST_SCORE_KEY = "rsq_best_percent_v1";
-      const NICKNAME_KEY = "rsq_nickname_v1";
-      const PASS_MARK = 80;
-      const QUIZ_TIME_SECONDS = 60;
-
-      function $(id) { return document.getElementById(id); }
-
-      const els = {
-        startScreen: $("startScreen"),
-        quizScreen: $("quizScreen"),
-        resultScreen: $("resultScreen"),
-        startBtn: $("startBtn"),
-        nextBtn: $("nextBtn"),
-        restartBtn: $("restartBtn"),
-        nickname: $("nickname"),
-        questionBlock: $("questionBlock"),
-        progressText: $("progressText"),
-        scoreSoFar: $("scoreSoFar"),
-        resultSummary: $("resultSummary"),
-        reviewBlock: $("reviewBlock"),
-        timerText: $("timerText")
+    const reviewItems = quiz.questions.map((q) => {
+      const selected = quiz.answers.get(q.id);
+      const isCorrect = selected === q.answerIndex;
+      if (isCorrect) correct += 1;
+      return {
+        q: q.q,
+        selectedText: (typeof selected === "number") ? q.options[selected] : "No answer",
+        correctText: q.options[q.answerIndex],
+        isCorrect
       };
+    });
 
-      const required = [
-        "startScreen","quizScreen","resultScreen","startBtn","nextBtn",
-        "restartBtn","questionBlock","progressText","scoreSoFar",
-        "resultSummary","reviewBlock","timerText"
-      ];
-      const missing = required.filter(k => !els[k]);
-      if (missing.length) {
-        console.error("Quiz init failed. Missing element IDs:", missing);
-        return;
-      }
+    const percent = total ? Math.round((correct / total) * 100) : 0;
+    const passed = percent >= PASS_MARK;
 
-      const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
-      if (!bank.length) {
-        els.startBtn.disabled = true;
-        els.startScreen.insertAdjacentHTML(
-          "beforeend",
-          `<p class="hint">Question bank not found. Check questions.js.</p>`
-        );
-        return;
-      }
+    const prevBest = getBestPercent();
+    if (prevBest === null || percent > prevBest) setBestPercent(percent);
 
-      function shuffle(arr) {
-        const a = arr.slice();
-        for (let i = a.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [a[i], a[j]] = [a[j], a[i]];
-        }
-        return a;
-      }
-      function pickN(arr, n) { return shuffle(arr).slice(0, Math.min(n, arr.length)); }
-      function show(el) { el.classList.remove("hidden"); }
-      function hide(el) { el.classList.add("hidden"); }
+    const nick = getNickname();
+    const whoLine = nick ? `<strong>Player:</strong> ${escapeHtml(nick)}<br />` : "";
 
-      function escapeHtml(s) {
-        return String(s)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#039;");
-      }
+    els.resultSummary.innerHTML = `
+      ${whoLine}
+      <strong>Score:</strong> ${correct}/${total} (${percent}%)
+      <span class="badge ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span><br />
+      <strong>Pass mark:</strong> ${PASS_MARK}%<br />
+      <strong>Best:</strong> ${getBestPercent()}%
+    `;
 
-      function getBestPercent() {
-        const raw = localStorage.getItem(BEST_SCORE_KEY);
-        const n = Number(raw);
-        return Number.isFinite(n) ? n : null;
-      }
-      function setBestPercent(p) { localStorage.setItem(BEST_SCORE_KEY, String(p)); }
+    els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
+      <div class="reviewItem">
+        <div><strong>Q${i + 1}.</strong> ${escapeHtml(it.q)}
+          <span class="badge ${it.isCorrect ? "pass" : "fail"}">${it.isCorrect ? "Correct" : "Incorrect"}</span>
+        </div>
+        <div><strong>Your answer:</strong> ${escapeHtml(it.selectedText)}</div>
+        <div><strong>Correct answer:</strong> ${escapeHtml(it.correctText)}</div>
+      </div>
+    `).join("");
 
-      function getNickname() { return (localStorage.getItem(NICKNAME_KEY) || "").trim(); }
-      function setNickname(n) { localStorage.setItem(NICKNAME_KEY, (n || "").trim()); }
+    hide(els.quizScreen);
+    show(els.resultScreen);
+  }
 
-      function bestLineHtml() {
-        const best = getBestPercent();
-        return best === null ? `<div><strong>Best:</strong> Not set</div>` : `<div><strong>Best:</strong> ${best}%</div>`;
-      }
+  function next() {
+    const qObj = quiz.questions[quiz.index];
+    if (!qObj) return;
+    if (!quiz.answers.has(qObj.id)) return;
 
-      let quiz = { questions: [], index: 0, answers: new Map() };
+    if (quiz.index === quiz.questions.length - 1) {
+      finishQuiz();
+      return;
+    }
+    quiz.index += 1;
+    renderQuestion();
+  }
 
-      let remainingSeconds = QUIZ_TIME_SECONDS;
-      let timerId = null;
+  function restart() {
+    hide(els.resultScreen);
+    hide(els.quizScreen);
+    if (els.nickname) els.nickname.value = getNickname();
+    show(els.startScreen);
+  }
 
-      function formatTime(seconds) {
-        const m = Math.floor(seconds / 60);
-        const s = seconds % 60;
-        return `${m}:${s.toString().padStart(2, "0")}`;
-      }
+  // Wire up
+  els.startBtn.addEventListener("click", startQuiz);
+  els.nextBtn.addEventListener("click", next);
+  els.restartBtn.addEventListener("click", restart);
 
-      function updateTimerDisplay() {
-        if (!els.timerText) return;
-        els.timerText.textContent = `Time left: ${formatTime(remainingSeconds)}`;
-      }
-
-      function startTimer() {
-        if (timerId !== null) {
-          clearInterval(timerId);
-          timerId = null;
-        }
-        remainingSeconds = QUIZ_TIME_SECONDS;
-        updateTimerDisplay();
-
-        timerId = setInterval(() => {
-          remainingSeconds -= 1;
-          if (remainingSeconds <= 0) {
-            remainingSeconds = 0;
-            updateTimerDisplay();
-            clearInterval(timerId);
-            timerId = null;
-            finishQuiz();
-            return;
-          }
-          updateTimerDisplay();
-        }, 1000);
-      }
-
-      function stopTimer() {
-        if (timerId !== null) {
-          clearInterval(timerId);
-          timerId = null;
-        }
-      }
-
-      function startQuiz() {
-        try {
-          setNickname(els.nickname ? els.nickname.value : "");
-          quiz.questions = pickN(bank, QUESTION_COUNT);
-          quiz.index = 0;
-          quiz.answers = new Map();
-
-          hide(els.startScreen);
-          hide(els.resultScreen);
-          show(els.quizScreen);
-
-          startTimer();
-          renderQuestion();
-        } catch (e) {
-          console.error("Start quiz error:", e);
-          alert("Something went wrong starting the quiz. Please refresh and try again.");
-        }
-      }
-
-      function renderQuestion() {
-        const qObj = quiz.questions[quiz.index];
-        if (!qObj) return;
-
-        els.nextBtn.disabled = true;
-
-        const chosen = quiz.answers.get(qObj.id);
-
-        els.progressText.textContent = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
-        els.scoreSoFar.innerHTML = `
-          <div>Answered: ${quiz.answers.size}/${quiz.questions.length}</div>
-          ${bestLineHtml()}
-        `;
-
-        const optionsHtml = qObj.options.map((opt, idx) => {
-          const checked = chosen === idx ? "checked" : "";
-          return `
-            <label class="option">
-              <input type="radio" name="opt" value="${idx}" ${checked} />
-              <span>${escapeHtml(opt)}</span>
-            </label>
-          `;
-        }).join("");
-
-        els.questionBlock.innerHTML = `
-          <h2>${escapeHtml(qObj.q)}</h2>
-          <div class="options">${optionsHtml}</div>
-        `;
-
-        els.questionBlock.querySelectorAll('input[name="opt"]').forEach((r) => {
-          r.addEventListener("change", (e) => {
-            quiz.answers.set(qObj.id, Number(e.target.value));
-            els.nextBtn.disabled = false;
-          });
-        });
-
-        if (typeof chosen === "number") els.nextBtn.disabled = false;
-        els.nextBtn.textContent = (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
-      }
-
-      function finishQuiz() {
-        stopTimer();
-
-        const total = quiz.questions.length;
-        let correct = 0;
-
-        const reviewItems = quiz.questions.map((q) => {
-          const selected = quiz.answers.get(q.id);
-          const isCorrect = selected === q.answerIndex;
-          if (isCorrect) correct += 1;
-          return {
-            q: q.q,
-            selectedText: (typeof selected === "number") ? q.options[selected] : "No answer",
-            correctText: q.options[q.answerIndex],
-            isCorrect
-          };
-        });
-
-        const percent = total ? Math.round((correct / total) * 100) : 0;
-        const passed = percent >= PASS_MARK;
-
-        const prevBest = getBestPercent();
-        if (prevBest === null || percent > prevBest) setBestPercent(percent);
-
-        const nick = getNickname();
-        const whoLine = nick ? `<strong>Player:</strong> ${escapeHtml(nick)}<br />` : "";
-
-        els.resultSummary.innerHTML = `
-          ${whoLine}
-          <strong>Score:</strong> ${correct}/${total} (${percent}%)
-          <span class="badge ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span><br />
-          <strong>Pass mark:</strong> ${PASS_MARK}%<br />
-          <strong>Best:</strong> ${getBestPercent()}%<br />
-          <strong>Time limit:</strong> ${QUIZ_TIME_SECONDS} seconds
-        `;
-
-        els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
-          <div class="reviewItem">
-            <div><strong>Q${i + 1}.</strong> ${escapeHtml(it.q)}
-              <span class="badge ${it.isCorrect ? "pass" : "fail"}">${it.isCorrect ? "Correct" : "Incorrect"}</span>
-            </div>
-            <div><strong>Your answer:</strong> ${escapeHtml(it.selectedText)}</div>
-            <div><strong>Correct answer:</strong> ${escapeHtml(it.correctText)}</div>
-          </div>
-        `).join("");
-
-        hide(els.quizScreen);
-        show(els.resultScreen);
-      }
-
-      function next() {
-        const qObj = quiz.questions[quiz.index];
-        if (!qObj) return;
-        if (!quiz.answers.has(qObj.id)) return;
-
-        if (quiz.index === quiz.questions.length - 1) {
-          finishQuiz();
-          return;
-        }
-        quiz.index += 1;
-        renderQuestion();
-      }
-
-      function restart() {
-        stopTimer();
-        hide(els.resultScreen);
-        hide(els.quizScreen);
-        if (els.nickname) els.nickname.value = getNickname();
-        show(els.startScreen);
-      }
-
-      els.startBtn.addEventListener("click", startQuiz);
-      els.nextBtn.addEventListener("click", next);
-      els.restartBtn.addEventListener("click", restart);
-
-      if (els.nickname) els.nickname.value = getNickname();
-      els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">${bestLineHtml()}</p>`);
-    })();
-  </script>
-</body>
-</html>
+  // Initialize start screen nickname + best
+  if (els.nickname) els.nickname.value = getNickname();
+  els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">${bestLineHtml()}</p>`);
+})();
