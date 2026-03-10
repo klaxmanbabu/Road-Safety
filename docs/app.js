@@ -4,6 +4,9 @@
   const NICKNAME_KEY = "rsq_nickname_v1";
   const PASS_MARK = 80;
 
+  // 20 seconds per question
+  const QUESTION_TIME_SECONDS = 20;
+
   function $(id) { return document.getElementById(id); }
 
   const els = {
@@ -18,10 +21,17 @@
     progressText: $("progressText"),
     scoreSoFar: $("scoreSoFar"),
     resultSummary: $("resultSummary"),
-    reviewBlock: $("reviewBlock")
+    reviewBlock: $("reviewBlock"),
+    // Optional separate display for per question timer (if you add it in HTML)
+    // questionTimerText: $("questionTimerText")
   };
 
-  const required = ["startScreen","quizScreen","resultScreen","startBtn","nextBtn","restartBtn","questionBlock","progressText","scoreSoFar","resultSummary","reviewBlock"];
+  const required = [
+    "startScreen","quizScreen","resultScreen","startBtn","nextBtn",
+    "restartBtn","questionBlock","progressText","scoreSoFar",
+    "resultSummary","reviewBlock"
+    // ,"questionTimerText"  // only if you add a separate element
+  ];
   const missing = required.filter(k => !els[k]);
   if (missing.length) {
     console.error("Quiz init failed. Missing element IDs:", missing);
@@ -31,7 +41,10 @@
   const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
   if (!bank.length) {
     els.startBtn.disabled = true;
-    els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">Question bank not found. Check questions.js.</p>`);
+    els.startScreen.insertAdjacentHTML(
+      "beforeend",
+      `<p class="hint">Question bank not found. Check questions.js.</p>`
+    );
     return;
   }
 
@@ -68,10 +81,71 @@
 
   function bestLineHtml() {
     const best = getBestPercent();
-    return best === null ? `<div><strong>Best:</strong> Not set</div>` : `<div><strong>Best:</strong> ${best}%</div>`;
+    return best === null
+      ? `<div><strong>Best:</strong> Not set</div>`
+      : `<div><strong>Best:</strong> ${best}%</div>`;
   }
 
   let quiz = { questions: [], index: 0, answers: new Map() };
+
+  // Per question timer state
+  let questionRemainingSeconds = QUESTION_TIME_SECONDS;
+  let questionTimerId = null;
+
+  function updateQuestionTimerDisplay() {
+    // Simple: append the per question countdown into progressText line
+    // You can change this to a dedicated element if you prefer.
+    const base = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
+    const timerPart = ` · Time left for this question: ${questionRemainingSeconds}s`;
+    els.progressText.textContent = base + timerPart;
+  }
+
+  function startQuestionTimer() {
+    if (questionTimerId !== null) {
+      clearInterval(questionTimerId);
+      questionTimerId = null;
+    }
+    questionRemainingSeconds = QUESTION_TIME_SECONDS;
+
+    // Initial update
+    updateQuestionTimerDisplay();
+
+    questionTimerId = setInterval(() => {
+      questionRemainingSeconds -= 1;
+      if (questionRemainingSeconds <= 0) {
+        questionRemainingSeconds = 0;
+        updateQuestionTimerDisplay();
+        clearInterval(questionTimerId);
+        questionTimerId = null;
+        handleQuestionTimeout();
+        return;
+      }
+      updateQuestionTimerDisplay();
+    }, 1000);
+  }
+
+  function stopQuestionTimer() {
+    if (questionTimerId !== null) {
+      clearInterval(questionTimerId);
+      questionTimerId = null;
+    }
+  }
+
+  // Called when one question's 20 sec timer expires
+  function handleQuestionTimeout() {
+    const qObj = quiz.questions[quiz.index];
+    if (!qObj) return;
+
+    // If user has not answered, we leave it as "No answer" (no entry in map)
+
+    // If this was the last question, finish quiz; otherwise go to next
+    if (quiz.index === quiz.questions.length - 1) {
+      finishQuiz();
+    } else {
+      quiz.index += 1;
+      renderQuestion();
+    }
+  }
 
   function startQuiz() {
     try {
@@ -95,11 +169,14 @@
     const qObj = quiz.questions[quiz.index];
     if (!qObj) return;
 
+    // Reset button and timer for this question
     els.nextBtn.disabled = true;
+    stopQuestionTimer();
 
     const chosen = quiz.answers.get(qObj.id);
 
-    els.progressText.textContent = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
+    els.progressText.textContent =
+      `Question ${quiz.index + 1} of ${quiz.questions.length}`;
     els.scoreSoFar.innerHTML = `
       <div>Answered: ${quiz.answers.size}/${quiz.questions.length}</div>
       ${bestLineHtml()}
@@ -128,10 +205,17 @@
     });
 
     if (typeof chosen === "number") els.nextBtn.disabled = false;
-    els.nextBtn.textContent = (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
+    els.nextBtn.textContent =
+      (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
+
+    // Start the 20 second timer for this question
+    startQuestionTimer();
   }
 
   function finishQuiz() {
+    // Stop the per question timer so nothing continues running
+    stopQuestionTimer();
+
     const total = quiz.questions.length;
     let correct = 0;
 
@@ -167,7 +251,9 @@
     els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
       <div class="reviewItem">
         <div><strong>Q${i + 1}.</strong> ${escapeHtml(it.q)}
-          <span class="badge ${it.isCorrect ? "pass" : "fail"}">${it.isCorrect ? "Correct" : "Incorrect"}</span>
+          <span class="badge ${it.isCorrect ? "pass" : "fail"}">
+            ${it.isCorrect ? "Correct" : "Incorrect"}
+          </span>
         </div>
         <div><strong>Your answer:</strong> ${escapeHtml(it.selectedText)}</div>
         <div><strong>Correct answer:</strong> ${escapeHtml(it.correctText)}</div>
@@ -183,6 +269,9 @@
     if (!qObj) return;
     if (!quiz.answers.has(qObj.id)) return;
 
+    // User moved manually, stop this question's timer
+    stopQuestionTimer();
+
     if (quiz.index === quiz.questions.length - 1) {
       finishQuiz();
       return;
@@ -192,6 +281,7 @@
   }
 
   function restart() {
+    stopQuestionTimer();
     hide(els.resultScreen);
     hide(els.quizScreen);
     if (els.nickname) els.nickname.value = getNickname();
@@ -205,5 +295,8 @@
 
   // Initialize start screen nickname + best
   if (els.nickname) els.nickname.value = getNickname();
-  els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">${bestLineHtml()}</p>`);
+  els.startScreen.insertAdjacentHTML(
+    "beforeend",
+    `<p class="hint">${bestLineHtml()}</p>`
+  );
 })();
