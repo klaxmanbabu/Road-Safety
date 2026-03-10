@@ -1,209 +1,70 @@
-(function () {
-  const QUESTION_COUNT = 6;
-  const BEST_SCORE_KEY = "rsq_best_percent_v1";
-  const NICKNAME_KEY = "rsq_nickname_v1";
-  const PASS_MARK = 80;
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quick Quiz</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1>Quick Quiz</h1>
+      <p class="subtitle">Walk-up, self-paced. Refresh to get a new random set of 6 questions.</p>
+    </header>
 
-  function $(id) { return document.getElementById(id); }
-
-  const els = {
-    startScreen: $("startScreen"),
-    quizScreen: $("quizScreen"),
-    resultScreen: $("resultScreen"),
-    startBtn: $("startBtn"),
-    nextBtn: $("nextBtn"),
-    restartBtn: $("restartBtn"),
-    nickname: $("nickname"),
-    questionBlock: $("questionBlock"),
-    progressText: $("progressText"),
-    scoreSoFar: $("scoreSoFar"),
-    resultSummary: $("resultSummary"),
-    reviewBlock: $("reviewBlock")
-  };
-
-  const required = ["startScreen","quizScreen","resultScreen","startBtn","nextBtn","restartBtn","questionBlock","progressText","scoreSoFar","resultSummary","reviewBlock"];
-  const missing = required.filter(k => !els[k]);
-  if (missing.length) {
-    console.error("Quiz init failed. Missing element IDs:", missing);
-    return;
-  }
-
-  const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
-  if (!bank.length) {
-    els.startBtn.disabled = true;
-    els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">Question bank not found. Check questions.js.</p>`);
-    return;
-  }
-
-  function shuffle(arr) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  }
-  function pickN(arr, n) { return shuffle(arr).slice(0, Math.min(n, arr.length)); }
-  function show(el) { el.classList.remove("hidden"); }
-  function hide(el) { el.classList.add("hidden"); }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  function getBestPercent() {
-    const raw = localStorage.getItem(BEST_SCORE_KEY);
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  }
-  function setBestPercent(p) { localStorage.setItem(BEST_SCORE_KEY, String(p)); }
-
-  function getNickname() { return (localStorage.getItem(NICKNAME_KEY) || "").trim(); }
-  function setNickname(n) { localStorage.setItem(NICKNAME_KEY, (n || "").trim()); }
-
-  function bestLineHtml() {
-    const best = getBestPercent();
-    return best === null ? `<div><strong>Best:</strong> Not set</div>` : `<div><strong>Best:</strong> ${best}%</div>`;
-  }
-
-  let quiz = { questions: [], index: 0, answers: new Map() };
-
-  function startQuiz() {
-    try {
-      setNickname(els.nickname ? els.nickname.value : "");
-      quiz.questions = pickN(bank, QUESTION_COUNT);
-      quiz.index = 0;
-      quiz.answers = new Map();
-
-      hide(els.startScreen);
-      hide(els.resultScreen);
-      show(els.quizScreen);
-
-      renderQuestion();
-    } catch (e) {
-      console.error("Start quiz error:", e);
-      alert("Something went wrong starting the quiz. Please refresh and try again.");
-    }
-  }
-
-  function renderQuestion() {
-    const qObj = quiz.questions[quiz.index];
-    if (!qObj) return;
-
-    els.nextBtn.disabled = true;
-
-    const chosen = quiz.answers.get(qObj.id);
-
-    els.progressText.textContent = `Question ${quiz.index + 1} of ${quiz.questions.length}`;
-    els.scoreSoFar.innerHTML = `
-      <div>Answered: ${quiz.answers.size}/${quiz.questions.length}</div>
-      ${bestLineHtml()}
-    `;
-
-    const optionsHtml = qObj.options.map((opt, idx) => {
-      const checked = chosen === idx ? "checked" : "";
-      return `
-        <label class="option">
-          <input type="radio" name="opt" value="${idx}" ${checked} />
-          <span>${escapeHtml(opt)}</span>
-        </label>
-      `;
-    }).join("");
-
-    els.questionBlock.innerHTML = `
-      <h2>${escapeHtml(qObj.q)}</h2>
-      <div class="options">${optionsHtml}</div>
-    `;
-
-    els.questionBlock.querySelectorAll('input[name="opt"]').forEach((r) => {
-      r.addEventListener("change", (e) => {
-        quiz.answers.set(qObj.id, Number(e.target.value));
-        els.nextBtn.disabled = false;
-      });
-    });
-
-    if (typeof chosen === "number") els.nextBtn.disabled = false;
-    els.nextBtn.textContent = (quiz.index === quiz.questions.length - 1) ? "Finish" : "Next";
-  }
-
-  function finishQuiz() {
-    const total = quiz.questions.length;
-    let correct = 0;
-
-    const reviewItems = quiz.questions.map((q) => {
-      const selected = quiz.answers.get(q.id);
-      const isCorrect = selected === q.answerIndex;
-      if (isCorrect) correct += 1;
-      return {
-        q: q.q,
-        selectedText: (typeof selected === "number") ? q.options[selected] : "No answer",
-        correctText: q.options[q.answerIndex],
-        isCorrect
-      };
-    });
-
-    const percent = total ? Math.round((correct / total) * 100) : 0;
-    const passed = percent >= PASS_MARK;
-
-    const prevBest = getBestPercent();
-    if (prevBest === null || percent > prevBest) setBestPercent(percent);
-
-    const nick = getNickname();
-    const whoLine = nick ? `<strong>Player:</strong> ${escapeHtml(nick)}<br />` : "";
-
-    els.resultSummary.innerHTML = `
-      ${whoLine}
-      <strong>Score:</strong> ${correct}/${total} (${percent}%)
-      <span class="badge ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span><br />
-      <strong>Pass mark:</strong> ${PASS_MARK}%<br />
-      <strong>Best:</strong> ${getBestPercent()}%
-    `;
-
-    els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
-      <div class="reviewItem">
-        <div><strong>Q${i + 1}.</strong> ${escapeHtml(it.q)}
-          <span class="badge ${it.isCorrect ? "pass" : "fail"}">${it.isCorrect ? "Correct" : "Incorrect"}</span>
-        </div>
-        <div><strong>Your answer:</strong> ${escapeHtml(it.selectedText)}</div>
-        <div><strong>Correct answer:</strong> ${escapeHtml(it.correctText)}</div>
+    <section id="startScreen" class="card">
+      <div class="row">
+        <label for="nickname"><strong>Optional: Enter your name.</strong></label>
       </div>
-    `).join("");
+      <div class="row">
+        <input id="nickname" type="text" maxlength="24" placeholder="Nickname (optional)" />
+      </div>
 
-    hide(els.quizScreen);
-    show(els.resultScreen);
-  }
+      <div class="row">
+        <button id="startBtn" class="primary" type="button">Start quiz</button>
+      </div>
 
-  function next() {
-    const qObj = quiz.questions[quiz.index];
-    if (!qObj) return;
-    if (!quiz.answers.has(qObj.id)) return;
+      <p class="hint">This demo stores progress only on your device (no server).</p>
+    </section>
 
-    if (quiz.index === quiz.questions.length - 1) {
-      finishQuiz();
-      return;
-    }
-    quiz.index += 1;
-    renderQuestion();
-  }
+    <section id="quizScreen" class="card hidden" aria-live="polite">
+      <div class="meta">
+        <div id="progressText"></div>
+        <div id="scoreSoFar"></div>
+      </div>
 
-  function restart() {
-    hide(els.resultScreen);
-    hide(els.quizScreen);
-    if (els.nickname) els.nickname.value = getNickname();
-    show(els.startScreen);
-  }
+      <div id="questionBlock" class="questionBlock"></div>
 
-  // Wire up
-  els.startBtn.addEventListener("click", startQuiz);
-  els.nextBtn.addEventListener("click", next);
-  els.restartBtn.addEventListener("click", restart);
+      <div class="actions">
+        <button id="nextBtn" class="primary" type="button" disabled>Next</button>
+      </div>
+    </section>
 
-  // Initialize start screen nickname + best
-  if (els.nickname) els.nickname.value = getNickname();
-  els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">${bestLineHtml()}</p>`);
-})();
+    <section id="resultScreen" class="card hidden" aria-live="polite">
+      <h2>Results</h2>
+      <p id="resultSummary"></p>
+
+      <details class="review">
+        <summary>Review answers</summary>
+        <div id="reviewBlock"></div>
+      </details>
+
+      <div class="actions">
+        <button id="restartBtn" type="button">Play Again</button>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <small>Hosted on GitHub Pages</small>
+    </footer>
+  </main>
+
+  <script>
+    // Ensure the quiz uses 6 questions even if app.js defaults to 5
+    window.QUIZ_QUESTION_COUNT = 6;
+  </script>
+  <script src="./questions.js?v=21"></script>
+  <script src="./app.js?v=21"></script>
+</body>
+</html>
