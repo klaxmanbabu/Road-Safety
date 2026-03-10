@@ -3,7 +3,6 @@
   const BEST_SCORE_KEY = "rsq_best_percent_v1";
   const NICKNAME_KEY = "rsq_nickname_v1";
   const PASS_MARK = 80;
-  const QUIZ_TIME_SECONDS = 60; // total time for the quiz
 
   function $(id) { return document.getElementById(id); }
 
@@ -19,15 +18,10 @@
     progressText: $("progressText"),
     scoreSoFar: $("scoreSoFar"),
     resultSummary: $("resultSummary"),
-    reviewBlock: $("reviewBlock"),
-    timerText: $("timerText") // new element
+    reviewBlock: $("reviewBlock")
   };
 
-  const required = [
-    "startScreen","quizScreen","resultScreen","startBtn","nextBtn",
-    "restartBtn","questionBlock","progressText","scoreSoFar",
-    "resultSummary","reviewBlock","timerText"
-  ];
+  const required = ["startScreen","quizScreen","resultScreen","startBtn","nextBtn","restartBtn","questionBlock","progressText","scoreSoFar","resultSummary","reviewBlock"];
   const missing = required.filter(k => !els[k]);
   if (missing.length) {
     console.error("Quiz init failed. Missing element IDs:", missing);
@@ -37,10 +31,7 @@
   const bank = Array.isArray(window.QUESTION_BANK) ? window.QUESTION_BANK : [];
   if (!bank.length) {
     els.startBtn.disabled = true;
-    els.startScreen.insertAdjacentHTML(
-      "beforeend",
-      `<p class="hint">Question bank not found. Check questions.js.</p>`
-    );
+    els.startScreen.insertAdjacentHTML("beforeend", `<p class="hint">Question bank not found. Check questions.js.</p>`);
     return;
   }
 
@@ -82,52 +73,6 @@
 
   let quiz = { questions: [], index: 0, answers: new Map() };
 
-  // Timer state
-  let remainingSeconds = QUIZ_TIME_SECONDS;
-  let timerId = null;
-
-  function formatTime(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  }
-
-  function updateTimerDisplay() {
-    if (!els.timerText) return;
-    els.timerText.textContent = `Time left: ${formatTime(remainingSeconds)}`;
-  }
-
-  function startTimer() {
-    // Clear any previous timer
-    if (timerId !== null) {
-      clearInterval(timerId);
-      timerId = null;
-    }
-    remainingSeconds = QUIZ_TIME_SECONDS;
-    updateTimerDisplay();
-
-    timerId = setInterval(() => {
-      remainingSeconds -= 1;
-      if (remainingSeconds <= 0) {
-        remainingSeconds = 0;
-        updateTimerDisplay();
-        clearInterval(timerId);
-        timerId = null;
-        // Auto-finish the quiz when time runs out
-        finishQuiz();
-        return;
-      }
-      updateTimerDisplay();
-    }, 1000);
-  }
-
-  function stopTimer() {
-    if (timerId !== null) {
-      clearInterval(timerId);
-      timerId = null;
-    }
-  }
-
   function startQuiz() {
     try {
       setNickname(els.nickname ? els.nickname.value : "");
@@ -139,7 +84,6 @@
       hide(els.resultScreen);
       show(els.quizScreen);
 
-      startTimer();
       renderQuestion();
     } catch (e) {
       console.error("Start quiz error:", e);
@@ -188,9 +132,6 @@
   }
 
   function finishQuiz() {
-    // Prevent multiple finishes / timer continuing after finish
-    stopTimer();
-
     const total = quiz.questions.length;
     let correct = 0;
 
@@ -220,8 +161,7 @@
       <strong>Score:</strong> ${correct}/${total} (${percent}%)
       <span class="badge ${passed ? "pass" : "fail"}">${passed ? "PASS" : "FAIL"}</span><br />
       <strong>Pass mark:</strong> ${PASS_MARK}%<br />
-      <strong>Best:</strong> ${getBestPercent()}%<br />
-      <strong>Time limit:</strong> ${QUIZ_TIME_SECONDS} seconds
+      <strong>Best:</strong> ${getBestPercent()}%
     `;
 
     els.reviewBlock.innerHTML = reviewItems.map((it, i) => `
@@ -252,7 +192,6 @@
   }
 
   function restart() {
-    stopTimer();
     hide(els.resultScreen);
     hide(els.quizScreen);
     if (els.nickname) els.nickname.value = getNickname();
